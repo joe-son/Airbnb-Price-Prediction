@@ -1,0 +1,383 @@
+---
+title: "Airbnb Price Prediction"
+output: html_document
+---
+
+##By: Joseph Son
+
+---
+
+#Processing Data
+
+###Loading data into R
+```{r}
+setwd("~/CS229A Project")
+listingsfull = read.csv('sflistings.csv', stringsAsFactors=FALSE)
+#summary(listingsfull)
+```
+
+###Create subset of data based on manual screen of useful features
+```{r}
+cols = c("price",
+         "house_rules",
+         #"host_name",
+         "host_since",
+         #"host_location", majority in SF
+         "host_response_time",
+         "host_is_superhost",
+         "host_verifications",
+         "host_identity_verified",
+         "neighbourhood_cleansed",
+         "property_type",
+         "room_type",
+         "accommodates",
+         "bathrooms",
+         "bedrooms",
+         "beds",
+         "bed_type",
+         "amenities",
+         #"square_feet", removed due to too many blanks
+         "security_deposit",
+         "cleaning_fee",
+         "guests_included",
+         "extra_people",
+         "minimum_nights",
+         "maximum_nights",
+         "availability_30",
+         "availability_60",
+         "availability_90",
+         "availability_365",
+         "number_of_reviews",
+         "review_scores_rating",
+         "review_scores_accuracy",
+         "review_scores_cleanliness",
+         "review_scores_checkin",
+         "review_scores_communication",
+         "review_scores_location",
+         "review_scores_value",
+         "instant_bookable",
+         "cancellation_policy",
+         #"require_guest_profile_picture", majority do require so removed
+         #"require_guest_phone_verification", majority do require so removed
+         "calculated_host_listings_count",
+         "reviews_per_month"
+         )
+listings = listingsfull[cols]
+#summary(listings)
+```
+
+###Clean data
+```{r}
+library(stringr)
+listings$price = as.numeric(gsub('\\$|,', '', listings$price))
+listings = listings[!(listings$price == 0),]
+listings$house_rules_length = str_count(listings$house_rules)
+listings$host_since = Sys.Date() - as.Date(listings$host_since, "%m/%d/%y")
+listings$host_response_time = transform(listings$host_response_time, est=ifelse(listings$host_response_time == "N/A", 0, 1))$est
+listings$host_is_superhost = transform(listings$host_is_superhost, est=ifelse(listings$host_is_superhost == "f", 0, 1))$est
+listings$host_verifications_number = str_count(listings$host_verifications, ",")
+listings$host_identity_verified = transform(listings$host_identity_verified, est=ifelse(listings$host_identity_verified == "f", 0, 1))$est
+listings$neighbourhood_cleansed[listings$neighbourhood_cleansed == "Presidio"] = "Presidio Heights"
+
+#needed to remove less frequently occurring neighbourhoods and property-types
+neighbourhood_count = as.data.frame(table(listings$neighbourhood_cleansed))
+neighbourhood_count_other = neighbourhood_count[(neighbourhood_count$Freq < 200),]
+listings$neighbourhood_cleansed[listings$neighbourhood_cleansed %in% neighbourhood_count_other$Var1] = "Other"
+listings$neighbourhood_cleansed = factor(listings$neighbourhood_cleansed)
+unique(listings$neighbourhood_cleansed)
+
+listings$property_type = factor(listings$property_type)
+property_type_count = as.data.frame(table(listings$property_type))
+property_type_count_other = property_type_count$Var1[property_type_count$Freq < 200]
+listings$property_type[listings$property_type %in% property_type_count_other] = "Other"
+listings$property_type[is.na(listings$property_type)] = "Other"
+
+listings$room_type = factor(listings$room_type)
+listings$bathrooms[is.na(listings$bathrooms)] = median(listings$bathrooms, na.rm=TRUE)
+listings$bedrooms[is.na(listings$bedrooms)] = median(listings$bedrooms, na.rm=TRUE)
+listings$beds[is.na(listings$beds)] = median(listings$beds, na.rm=TRUE)
+listings$bed_type = factor(listings$bed_type)
+listings$security_deposit = as.numeric(gsub('\\$|,', '', listings$security_deposit))
+listings$security_deposit[listings$security_deposit==""] = NA
+listings$security_deposit[is.na(listings$security_deposit)] = median(listings$security_deposit, na.rm=TRUE)
+listings$cleaning_fee = as.numeric(gsub('\\$|,', '', listings$cleaning_fee))
+listings$cleaning_fee[listings$cleaning_fee==""] = NA
+listings$cleaning_fee[is.na(listings$cleaning_fee)] = median(listings$cleaning_fee, na.rm=TRUE)
+listings$security_deposit = as.numeric(gsub('\\$|,', '', listings$security_deposit))
+listings$extra_people = as.numeric(gsub('\\$|,', '', listings$extra_people))
+listings$review_scores_rating[is.na(listings$review_scores_rating)] = median(listings$review_scores_rating, na.rm=TRUE)
+listings$review_scores_accuracy[is.na(listings$review_scores_accuracy)] = median(listings$review_scores_accuracy, na.rm=TRUE)
+listings$review_scores_cleanliness[is.na(listings$review_scores_cleanliness)] = median(listings$review_scores_cleanliness, na.rm=TRUE)
+listings$review_scores_checkin[is.na(listings$review_scores_checkin)] = median(listings$review_scores_checkin, na.rm=TRUE)
+listings$review_scores_communication[is.na(listings$review_scores_communication)] = median(listings$review_scores_communication, na.rm=TRUE)
+listings$review_scores_location[is.na(listings$review_scores_location)] = median(listings$review_scores_location, na.rm=TRUE)
+listings$review_scores_value[is.na(listings$review_scores_value)] = median(listings$review_scores_value, na.rm=TRUE)
+listings$instant_bookable = transform(listings$instant_bookable, est=ifelse(listings$instant_bookable == "f", 0, 1))$est
+listings$cancellation_policy = factor(listings$cancellation_policy)
+listings$reviews_per_month[is.na(listings$reviews_per_month)] = median(listings$reviews_per_month, na.rm=TRUE)
+
+#feature scaling
+listings$price = log(listings$price)
+scalefunc = function (col) (scale(col, center = mean(col), scale = sd(col)))
+listings[c('accommodates','bathrooms','bedrooms',"beds","security_deposit","cleaning_fee","guests_included","extra_people","minimum_nights","maximum_nights","availability_30","availability_60","availability_90","availability_365","number_of_reviews","review_scores_rating","review_scores_accuracy","review_scores_cleanliness","review_scores_checkin","review_scores_communication","review_scores_location","review_scores_value","calculated_host_listings_count","reviews_per_month","house_rules_length","host_verifications_number")] = lapply(listings[c('accommodates','bathrooms','bedrooms',"beds","security_deposit","cleaning_fee","guests_included","extra_people","minimum_nights","maximum_nights","availability_30","availability_60","availability_90","availability_365","number_of_reviews","review_scores_rating","review_scores_accuracy","review_scores_cleanliness","review_scores_checkin","review_scores_communication","review_scores_location","review_scores_value","calculated_host_listings_count","reviews_per_month","house_rules_length","host_verifications_number")], scalefunc)
+
+#summary(listings)
+```
+
+###Split into train, validation, and test sets
+```{r}
+spec = c(train = .8, test = .1, val = .1)
+
+g = sample(cut(
+  seq(nrow(listings)), 
+  nrow(listings)*cumsum(c(0,spec)),
+  labels = names(spec)
+))
+
+res = split(listings, g)
+drops = c("house_rules","host_since","host_verifications","amenities") #remove unused columns
+
+train = res$train[ ,!(names(res$train) %in% drops)]
+train$property_type = droplevels(train$property_type)
+
+val = res$val[ ,!(names(res$val) %in% drops)]
+val$property_type <- factor(val$property_type, levels = levels(train$property_type))
+
+test = res$test[ ,!(names(res$test) %in% drops)]
+test$property_type <- factor(test$property_type, levels = levels(train$property_type))
+```
+
+#Building Models
+
+###Multiple Regression
+```{r}
+fit = lm(price ~ ., data = train)
+fit.sum = summary(fit)
+
+mse <- function(model) (mean(model$residuals^2))
+rsq <- function (x, y) cor(x, y) ^ 2
+
+paste("train model -> m: ", length(train$price), "; train mse: ", exp(mean((train$price - predict(fit, train)) ^ 2)), "; train R2: ", fit.sum$r.squared)
+paste("val pred -> m: ", length(val$price), "; val mse: ", exp(mean((val$price - predict(fit, val)) ^ 2)), "; val R2: ", rsq(predict(fit, val),val$price))
+```
+
+###Lasso
+```{r}
+library(glmnet)
+grid = 10^seq(10,-2,length=100)
+x=model.matrix(price~.,train)[,-1]
+xval=model.matrix(price~.,val)[,-1]
+y=train$price
+
+lasso.mod = glmnet(x,y,alpha=1,lambda=grid)
+#plot(lasso.mod)
+
+set.seed(1)
+cv.out=cv.glmnet(x,y,alpha=1)
+#plot(cv.out)
+bestlam=cv.out$lambda.min
+
+lasso.pred.train=predict(lasso.mod,s=bestlam,newx=x)
+lasso.pred.val=predict(lasso.mod,s=bestlam,newx=xval)
+
+out=glmnet(x,y,alpha=1,lambda=grid)
+lasso.coef=predict(out,type="coefficients",s=bestlam)[1:58,]
+lasso.coef[lasso.coef!=0]
+
+paste("train model -> m: ", length(train$price), "; train mse: ", exp(mean((y - lasso.pred.train) ^ 2)), "; train R2: ", rsq(lasso.pred.train,y))
+paste("val pred -> m: ", length(val$price), "; val mse: ", exp(mean((val$price - lasso.pred.val) ^ 2)), "; val R2: ", rsq(lasso.pred.val,val$price))
+```
+
+###Ridge Regression
+```{r}
+ridge.mod = glmnet(x,y,alpha=0,lambda=grid)
+set.seed(1)
+cv.out=cv.glmnet(x,y,alpha=0)
+#plot(cv.out)
+bestlam=cv.out$lambda.min
+ridge.pred.train = predict(ridge.mod,s=bestlam,newx=x)
+ridge.pred.val = predict(ridge.mod,s=bestlam,newx=xval)
+
+paste("train mse: ", exp(mean((y - ridge.pred.train) ^ 2)), "; train R2: ", rsq(ridge.pred.train,y))
+paste("val mse: ", exp(mean((val$price - ridge.pred.val) ^ 2)), "; val R2: ", rsq(ridge.pred.val,val$price))
+```
+
+###Random Forest
+```{r}
+library(randomForest)
+set.seed(1)
+rf = randomForest(price~.,data=train,mtry=7,importance=TRUE, ntree=100)
+rf
+rf.pred.val = predict(rf, newdata=val[,-1], predict.all=TRUE)
+rf.pred.test = predict(rf, newdata=test[,-1], predict.all=TRUE)
+
+paste("train mse: ", exp(mean((train$price - rf$predicted) ^ 2)), "; train R2: ", rsq(rf$predicted,y))
+paste("val mse: ", exp(mean((val$price-rf.pred.val$aggregate)^2)), "; val R2: ", rsq(rf.pred.val$aggregate,val$price))
+paste("test mse: ", exp(mean((test$price-rf.pred.test$aggregate)^2)), "; test R2: ", rsq(rf.pred.test$aggregate,test$price))
+```
+
+###SVR with RBF Kernel
+```{r}
+library(e1071)
+model = svm(price~.,data=train,kernel="radial",cost = 5)
+svm.pred.train = predict(model,train)
+svm.pred.val = predict(model,newdata=val)
+svm.pred.test = predict(model,newdata=test)
+
+paste("train mse: ", exp(mean((train$price - svm.pred.train) ^ 2)), "; train R2: ", rsq(svm.pred.train,train$price))
+paste("val mse: ", exp(mean((val$price-svm.pred.val)^2)), "; val R2: ", rsq(svm.pred.val,val$price))
+paste("test mse: ", exp(mean((test$price-svm.pred.test)^2)), "; test R2: ", rsq(svm.pred.test,test$price))
+```
+
+#NLP
+
+###Load data
+```{r}
+setwd("~/CS229A Project")
+library(data.table)
+sflistingsfull = read.csv('sflistings.csv', stringsAsFactors=FALSE)
+reviewsfull = fread("sfreviews.csv",header=TRUE,sep=",",data.table=FALSE)
+```
+
+###Format data
+```{r}
+#Lookup price/availability for reviews
+reviews = merge(x=reviewsfull, y=sflistingsfull[,c("id","price","availability_365", "review_scores_rating")], by.x='listing_id', by.y='id')
+#Format price data
+reviews$price = as.numeric(gsub('\\$|,', '', reviews$price))
+
+#Create data frames for summary analysis (SF/NY)
+listing_summary = sflistingsfull[,c("summary","price","availability_365", "review_scores_rating")]
+listing_summary$price = as.numeric(gsub('\\$|,', '', listing_summary$price))
+listing_summary$availability_365 = as.numeric(listing_summary$availability_365)
+
+#Categorize price level
+summary(reviews$price)
+levels <- c(0, 75, 150, 250, Inf)
+labels <- c("Low ($0-75)", "Medium ($76-150)", "High ($151-225)", "Very High ($226+)")
+reviews$price_tier = cut(reviews$price, levels, labels)
+listing_summary$price_tier = cut(listing_summary$price, levels, labels)
+
+#Categorize availability level
+summary(reviews$availability_365)
+levels <- c(-Inf, 75, 150, 225, Inf)
+labels <- c("Low", "Medium", "High", "Very High")
+reviews$avail_tier = cut(reviews$availability_365, levels, labels)
+listing_summary$avail_tier = cut(listing_summary$availability_365, levels, labels)
+
+#Categorize review_scores_rating level
+summary(reviews$review_scores_rating)
+levels <- c(-Inf, 97, Inf)
+labels <- c("Low", "High")
+reviews$rating_tier = cut(reviews$review_scores_rating, levels, labels)
+listing_summary$rating_tier = cut(listing_summary$review_scores_rating, levels, labels)
+
+head(reviews$price_tier)
+head(reviews$avail_tier)
+head(reviews$rating_tier)
+```
+
+###Load Libraries
+```{r}
+# read in the libraries we're going to use
+#install.packages("processx",dependencies = TRUE)
+library(devtools)
+slam_url <- "https://cran.r-project.org/src/contrib/Archive/slam/slam_0.1-37.tar.gz"
+#install_url(slam_url)
+#install.packages("stringi",dep=TRUE)
+library(tidyverse) # general utility & workflow functions
+library(tidytext) # tidy implementation of NLP methods
+library(topicmodels) # for LDA topic modelling 
+library(tm) # general text mining functions, making document term matrixes
+library(SnowballC) # for stemming
+
+#install.packages("qdapDictionaries")
+library(qdapDictionaries)
+```
+
+###Supervised Learning
+```{r}
+# function that takes in a dataframe and the name of the columns
+# with the document texts and the topic labels. If plot is set to
+# false it will return the tf-idf output rather than a plot.
+top_terms_by_topic_tfidf <- function(text_df, text_column, group_column, plot = T, ylab){
+    # name for the column we're going to unnest_tokens_ to
+    # (you only need to worry about enquo stuff if you're
+    # writing a function using using tidyverse packages)
+    group_column <- enquo(group_column)
+    text_column <- enquo(text_column)
+    
+    is.word  <- function(x) x %in% Fry_1000 # or use any dataset from package
+    
+    # get the count of each word in each review
+    words <- text_df %>%
+      unnest_tokens(word, !!text_column) %>%
+      count(!!group_column, word) %>% 
+      ungroup() %>% 
+      {.[which(is.word(.$word)),]} %>% 
+      {.[which(.$n>50),]}
+      #filter(., word %in% Fry_1000)
+
+    #words <- words[which(is.word(words$word)),]
+    #words <- words[which(words$n>50),]
+    
+    # get the number of words per text
+    total_words <- words %>% 
+      group_by(!!group_column) %>% 
+      summarize(total = sum(n))
+    
+    # combine the two dataframes we just made
+    words <- left_join(words, total_words)
+
+    # get the tf_idf & order the words by degree of relevence
+    tf_idf <- words %>%
+      bind_tf_idf(word, !!group_column, n) %>%
+      select(-total) %>%
+      arrange(desc(tf_idf)) %>%
+      mutate(word = factor(word, levels = rev(unique(word))))
+    
+    if(plot == T){
+        # convert "group" into a quote of a name
+        # (this is due to funkiness with calling ggplot2
+        # in functions)
+        group_name <- quo_name(group_column)
+        
+        # plot the 10 most informative terms per topic
+        #ungroup(top_n(group_by(tf_idf$group_column), 10))
+        
+        #png(filename="~/CS229A Project/name.png")
+        tf_idf %>% 
+          group_by(!!group_column) %>% 
+          top_n(10) %>% 
+          ungroup %>%
+          ggplot(aes(word, tf_idf, fill = as.factor(group_name))) +
+          geom_col(show.legend = FALSE) +
+          labs(x = NULL, y = ylab) +
+          facet_wrap(reformulate(group_name), scales = "free") +
+          coord_flip() #%>%
+          #ggsave(filename="plot.png",.,device="png")
+ 
+    }else{
+        # return the entire tf_idf dataframe
+        return(tf_idf)
+    }
+}
+```
+
+###SF Reviews & Price
+```{r}
+top_terms_by_topic_tfidf(text_df = reviews, # dataframe
+                         text_column = comments, # column with text
+                         group_column = price_tier, # column with topic label
+                         plot = T,
+                         "TF-IDF on San Francisco Reviews by Price Tier") # return a plot
+```
+
+###SF Summary & Price
+```{r}
+top_terms_by_topic_tfidf(text_df = listing_summary, # dataframe
+                         text_column = summary, # column with text
+                         group_column = price_tier, # column with topic label
+                         plot = T,
+                         "TF-IDF on San Francisco Summaries by Price Tier") # return a plot
+```
