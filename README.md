@@ -1,4 +1,4 @@
-# AirbnbPricePrediction
+# Airbnb Price Prediction
 
 This was a project that I completed for my CS229A (Applied Machine Learning) course at Stanford.
 
